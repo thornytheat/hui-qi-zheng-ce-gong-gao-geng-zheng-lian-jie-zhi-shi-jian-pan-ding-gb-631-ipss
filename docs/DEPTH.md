@@ -1,6 +1,6 @@
 # 深度登记 noticechain（惠企政策公告更正链与截止时间判定）
 
-- 规模：中型（7 个功能模块 / 7 个页面 / 96 条测试）
+- 规模：中型（8 个功能模块 / 8 个页面 / 131 条测试）
 - 核心规则一：**公告链合并**——同一 `doc_no` 的公告按 `公告序号` 成链，更正覆盖指定字段、延期顺延截止、撤销作废；链内重复序号、时间倒挂、父公告缺失一律整链隔离，给出稳定原因码与证据行，不猜哪条为准。
 - 核心规则二：**工作日截止推算**——`自发布之日起 N 个工作日` 按「周一至周五 − 法定节假日 + 调休上班日」逐日推进，发布日不计入，计数区间左闭右开 `[发布日次日, 截止日次日)`。
 - 使用者与工作流：园区企服组 6 人每天盯 3 个门户，原先手工抄截止日期到表格，更正公告常被漏看；现在一次采集即可得到「当前有效截止 + 可申报清单 + 冲突隔离」，并逐条可复核。
@@ -16,6 +16,7 @@
 | M5 批次与续跑 | 查历史、断点续跑、同源幂等重跑 | GET /api/batches、页面 /batches | `app/modules/m5_batches/resume.py` `app/modules/m5_batches/state.py` `app/modules/m5_batches/service.py` | `tests/test_batches.py` |
 | M6 复核与导出 | 确认四账，导出清单/隔离/清单文件 | GET /api/export、页面 /export | `app/modules/m6_export/csv_out.py` `app/modules/m6_export/manifest_out.py` `app/modules/m6_export/service.py` | `tests/test_export.py` |
 | M7 复核与回放 | 看冲突链、按公告号回放、写人工裁定与依据 | GET /api/review、GET /api/review/replay、POST /api/review/ruling、页面 /review | `app/modules/m7_review/review.py` `app/modules/m7_review/replay.py` `app/modules/m7_review/service.py` | `tests/test_m7_review.py` |
+| M8 下架与审计 | 办理下架/恢复、授权审计回放原文证据、处置留痕与身份核验 | POST /api/takedown、POST /api/takedown/restore、GET /api/audit/replay、GET /api/audit/trail、POST /api/auth/token、页面 /takedown | `app/modules/m8_takedown/auth.py` `app/modules/m8_takedown/takedown.py` `app/modules/m8_takedown/audit.py` `app/modules/m8_takedown/service.py` | `tests/test_m8_takedown.py` |
 
 端到端：`tests/test_e2e.py`（样例站 → 采信 → 链判定 → 清单 → 导出 → 复核回放，含 4xx 失败输入与幂等重跑）。
 
@@ -37,6 +38,9 @@
 | TRAP-23 | `自发布之日起 30 个工作日` 的截止端点在不在区间内 | 两端都算，相邻区间重复计入一天 | 声明左闭右开 `[发布日次日, 截止日次日)`，扣除节假日、计入调休 | `app/modules/m4_chain/workdays.py` | `tests/test_chain.py::test_workday_interval_is_half_open` |
 | TRAP-27 | 冲突链人工裁定与自动判定不同（自动整链隔离，人工选 800 万那版） | 只改状态或只留最终值，事后看不出原自动判定是什么 | 以人工结论重算并记 `M_MANUAL_OVERRIDE`，快照同时留 `auto_status`/`auto_amount`/`auto_deadline` 与逐字段差异 | `app/modules/m7_review/service.py`、`app/modules/m7_review/review.py` | `tests/test_m7_review.py::test_manual_ruling_overrides_conflict_and_keeps_both_values` |
 | TRAP-28 | 撤销（序号 2）之后又出现更正（序号 3） | 后到版本照常覆盖，已作废的链被复活成可申报 | 迁移表把撤销后的 发布/更正/延期 判为非法迁移，该版不能被选为有效版（`M_ILLEGAL_TRANSITION`，409）；M4 侧只登记 `C_AFTER_CANCEL`，链仍为已撤销 | `app/modules/m7_review/review.py`、`app/modules/m4_chain/chain.py` | `tests/test_m7_review.py::test_correction_after_cancel_is_illegal_transition` |
+| TRAP-29 | 门户要求下架含敏感信息的公告，历史批次仍能下载原文 | 删最新批次的行，但旧批次/导出/链详情仍能取到原文；或物理销毁原件导致审计无证据 | 处置态按 `doc_no` 全局存储（不绑批次），普通查询/链详情/隔离区/复核回放/五类导出统一过滤 `DOWN` 公文号；原件一行不删，授权审计经 `/api/audit/replay` 回放首次下架批次的原文证据 | `app/modules/m8_takedown/takedown.py`、`app/modules/m4_chain/service.py`、`app/modules/m6_export/service.py` | `tests/test_m8_takedown.py::TestPublicIsolation`、`TestSurvivesBatchesAndFailures::test_takedown_applies_to_historical_batches` |
+| TRAP-30 | 下架办理中断后续跑，或重新采集把已封禁公告重新公开 | 失败批次回滚或新批次重建数据，隔离态丢失，敏感内容复活 | 隔离态独立于批次事务存在 `takedown_status`，失败尝试只写 attempt 不碰处置表；续跑/复采（含幂等重放与新批次）后的所有普通读路径都重新套用同一份 DOWN 集合 | `app/modules/m8_takedown/takedown.py`、`app/store.py` | `tests/test_m8_takedown.py::TestSurvivesBatchesAndFailures` |
+| TRAP-31 | 调用方在请求体里自报「审计员」身份越权调取原文 | 信任 body 里的 actor/role 字段，任何人都能把自己提权成审计员 | 身份只来自服务端 HMAC 签名令牌（验签 + 时效 + 角色目录），body 字段不参与授权；伪造/过期/越权抛 401/403 并写 `takedown_security_log`；审计原文仅 `audit_officer` 可调 | `app/modules/m8_takedown/auth.py`、`app/modules/m8_takedown/service.py` | `tests/test_m8_takedown.py::TestServerSideIdentity` |
 
 ## 对账规则
 
@@ -51,6 +55,7 @@
 
 - 反例（朴素实现会挂）：`tests/test_chain.py::test_naive_weekday_count_differs`（只数周一至周五得到 2026-11-09，正确是 2026-11-13）、`tests/test_ingest.py::test_naive_splitlines_breaks_records`、`tests/test_parse.py::test_naive_float_parse_would_raise`、`tests/test_chain.py::test_naive_last_write_wins_would_revive_cancelled_chain`（撤销后的更正仍不能复活链）、`tests/test_m7_review.py::test_long_chain_compresses_without_changing_conclusion`（逐版覆盖会把作废链算成最后一版金额）。
 - 不变量：`tests/test_batches.py::test_idempotent_rerun_adds_no_rows`（幂等）、`tests/test_quality.py::test_reconcile_amounts_invariant_holds`（守恒）、`tests/test_ingest.py::test_page_account_identity`（页账守恒）、`tests/test_m7_review.py::test_replay_state_matches_chain_for_every_chain`（回放与链判定一致）、`tests/test_m7_review.py::test_ruling_rerun_keeps_single_trail`（裁定留痕幂等）。
+- 下架审计不变量：`tests/test_m8_takedown.py::TestIdempotentApplication`（同申请重试不新增处置记录）、`TestSurvivesBatchesAndFailures`（失败/续跑/复采不重新公开已封禁内容）、`TestRestoreKeepsHistory`（恢复保留完整下架历史、再下架追加证据）、`TestServerSideIdentity`（伪造/过期/越权身份一律拒绝并记安全日志）。
 - 端到端：`tests/test_e2e.py::test_full_pipeline_end_to_end`。
 
 ## 已知不覆盖
@@ -59,5 +64,7 @@
 - 法定节假日表只维护 2026 年（`app/config.py` 的 `HOLIDAYS_2026` / `MAKEUP_WORKDAYS_2026`），跨年公告会落到「表外日期按周一至周五」的默认规则。
 - 门户 B 第 2 页之后的公告（`共 13 条` 只抓到第 1 页）在样例站未落文件，`E_PAGING_NO_NEXT` 只记录断点，不自动构造第 2 页 URL。
 - 只做单机 SQLite 与串行采集；没有并发抓取、限流与重试退避（内部 6 人使用场景下不需要）。
-- 裁定只记「人名 + 依据」文本，没有登录态与权限校验（内部 6 人共用一台机器，人事后靠名字追）。
+- M7 冲突链裁定仍只记「人名 + 依据」文本，不挂登录态（内部 6 人共用一台机器，人事后靠名字追）；需要强身份的操作走 M8：下架/恢复/审计回放必须持服务端 HMAC 令牌，角色分 `takedown_operator` 与 `audit_officer`。
+- M8 令牌为单机 HMAC 对称签名，没有接入统一 SSO/OAuth、也没有令牌吊销列表（TTL 12 小时到期自动失效）；密钥轮换后旧令牌立即失效。多实例部署需共享 `NOTICECHAIN_AUDIT_SECRET`。
+- 下架粒度是整条公告链（按 `doc_no`），不支持只屏蔽链内某一版或某几个字段；字段级脱敏需要扩展 `takedown_status` 的作用域，超出本期范围。
 - 裁定后清单是**独立视图**，不回写 `chains` 表；重新采集会生成新批次，旧裁定留在旧批次里，跨批次比对需要人工带批次号。

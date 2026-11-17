@@ -40,6 +40,7 @@ def api_policies(batch_id: str | None = None, status: str | None = None,
             }
             for c in data["chains"]
         ],
+        "taken_down_doc_nos": [c["doc_no"] for c in data.get("taken_down", [])],
     }
 
 
@@ -47,6 +48,9 @@ def api_policies(batch_id: str | None = None, status: str | None = None,
 def api_chain(doc_no: str, batch_id: str | None = None,
               ctx: Ctx = Depends(get_ctx)) -> dict:
     resolved = _batch_id(ctx, batch_id)
+    if doc_no in ctx.store.down_doc_nos():
+        # M8：下架内容对普通查询等同不存在，不泄露标题/正文/截止；审计走授权接口。
+        raise errors.NotFound(f"公文号 {doc_no} 已下架隔离", code="T_TAKEN_DOWN")
     item = service.detail(ctx.store, resolved, doc_no, ctx.settings)
     if item is None:
         raise errors.NotFound(f"批次 {resolved} 中没有公文号 {doc_no}", code="E_NOT_FOUND")
@@ -86,6 +90,10 @@ def page_policies(request: Request, batch_id: str | None = None,
 def page_chain(request: Request, doc_no: str, batch_id: str | None = None,
                ctx: Ctx = Depends(get_ctx)):
     batch = ctx.current_batch(batch_id)
+    if doc_no in ctx.store.down_doc_nos():
+        # M8：下架内容不在普通页面渲染，给出隔离提示而非原文。
+        raise errors.NotFound(f"公文号 {doc_no} 已下架隔离，授权审计可查原文",
+                              code="T_TAKEN_DOWN")
     item = None
     if batch is not None:
         item = service.detail(ctx.store, batch["batch_id"], doc_no, ctx.settings)

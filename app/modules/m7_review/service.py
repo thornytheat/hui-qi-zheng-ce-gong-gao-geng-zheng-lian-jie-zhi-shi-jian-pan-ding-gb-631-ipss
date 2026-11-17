@@ -55,6 +55,10 @@ def _snapshot(ruling: dict) -> dict:
 
 def replay_doc(store, batch_id: str, doc_no: str, settings) -> dict | None:
     """按公告号回放：候选优先级 + 逐版合并 + 非法迁移 + 与链判定的比对。"""
+    # M8：下架公告的原文证据只走授权审计（/api/audit/replay），普通复核口不放行。
+    if doc_no in store.down_doc_nos():
+        raise errors.NotFound(f"公文号 {doc_no} 已下架隔离，原文证据请走授权审计",
+                              code="T_TAKEN_DOWN")
     chain_row = store.load_chain(batch_id, doc_no)
     if chain_row is None:
         return None
@@ -118,10 +122,14 @@ def replay_doc(store, batch_id: str, doc_no: str, settings) -> dict | None:
 def review_view(store, batch_id: str, settings, *, doc_no: str | None = None) -> dict:
     """复核页数据：待复核队列、已裁定列表、裁定后清单、当前回放。"""
     chains = store.load_chains(batch_id)
+    down = store.down_doc_nos()
     rulings = {row["doc_no"]: row for row in store.load_rulings(batch_id)}
     queue: list[dict] = []
     for chain in chains:
         if not review.needs_review(chain):
+            continue
+        if chain["doc_no"] in down:
+            # M8：已下架的冲突链不进普通复核队列，证据只对授权审计开放。
             continue
         conflicts = chain.get("conflicts") or []
         queue.append({
@@ -136,6 +144,9 @@ def review_view(store, batch_id: str, settings, *, doc_no: str | None = None) ->
     listed_count = 0
     listed_amount = Decimal("0")
     for key in sorted(rulings):
+        if key in down:
+            # M8：已下架公文号的人工裁定不进公开的裁定后清单，留痕仍在库可审计。
+            continue
         ruling = rulings[key]
         snapshot = _snapshot(ruling)
         reviewed.append({

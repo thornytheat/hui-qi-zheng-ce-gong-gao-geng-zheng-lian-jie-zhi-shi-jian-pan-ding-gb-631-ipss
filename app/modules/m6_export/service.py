@@ -55,12 +55,25 @@ def policies_csv(store, batch_id: str, settings) -> bytes:
 def quarantine_csv(store, batch_id: str) -> bytes:
     from ..m3_quality import quarantine
     rows = store.load_quarantine(batch_id)
+    # M8：下架公文号关联的隔离行也带原值，普通导出一并剔除，仅授权审计可回看。
+    down = store.down_doc_nos()
+    if down:
+        down_refs = set()
+        for doc_no in down:
+            chain = store.load_chain(batch_id, doc_no)
+            if chain is not None:
+                down_refs.update(v["row_ref"] for v in chain["version_rows"])
+        rows = [r for r in rows if r.get("row_ref") not in down_refs]
     return csv_out.encode_csv(quarantine.to_csv_text(rows))
 
 
 def chains_csv(store, batch_id: str) -> bytes:
+    # M8：链版本导出同样剔除下架公文号，历史批次的原文不会从导出侧泄露。
+    down = store.down_doc_nos()
     rows = []
     for chain in store.load_chains(batch_id):
+        if chain["doc_no"] in down:
+            continue
         detail = store.load_chain(batch_id, chain["doc_no"])
         for version in detail["version_rows"]:
             rows.append([

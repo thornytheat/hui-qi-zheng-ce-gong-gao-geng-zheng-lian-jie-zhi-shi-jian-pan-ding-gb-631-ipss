@@ -151,6 +151,34 @@ REASONS = {
     "M_NO_SUCH_SEQ": _r(
         "M_NO_SUCH_SEQ", ERROR, "review",
         "选定的公告序号不在该链内", "先看回放表里实际有哪些序号"),
+    # ---- M8 下架与审计 ----
+    "T_TAKEN_DOWN": _r(
+        "T_TAKEN_DOWN", ERROR, "takedown",
+        "公告含敏感信息，已按门户要求下架隔离", "普通查询与导出不可见；授权审计可调原文与裁定依据"),
+    "T_RESTORED": _r(
+        "T_RESTORED", INFO, "takedown",
+        "下架公告经复核后恢复公开", "恢复不删除处置历史，下架/恢复全程留痕"),
+    "T_IDEMPOTENT_RETRY": _r(
+        "T_IDEMPOTENT_RETRY", INFO, "takedown",
+        "同一申请重复提交，命中既有处置不新增记录", "申请号相同视为同一次申请，直接返回原裁定"),
+    "T_BAD_REQUEST": _r(
+        "T_BAD_REQUEST", ERROR, "takedown",
+        "下架/恢复申请参数不完整", "公文号、申请号、原因与依据都要填，依据写清门户要求出处"),
+    "T_NO_SUCH_DOC": _r(
+        "T_NO_SUCH_DOC", ERROR, "takedown",
+        "申请下架的公文号不在任何已采批次中", "先确认公文号，再提交下架申请"),
+    "T_ALREADY_DOWN": _r(
+        "T_ALREADY_DOWN", WARN, "takedown",
+        "公告已处于下架状态，不能重复下架", "同一申请重试走幂等；确需变更请走恢复流程"),
+    "T_NOT_DOWN": _r(
+        "T_NOT_DOWN", WARN, "takedown",
+        "公告未下架，不能恢复", "先在处置记录里确认当前状态"),
+    "T_AUTH_REQUIRED": _r(
+        "T_AUTH_REQUIRED", ERROR, "takedown",
+        "缺少服务端签发的审计身份令牌", "审计接口只认服务端核验后的身份，不接受自报身份"),
+    "T_AUTH_FORBIDDEN": _r(
+        "T_AUTH_FORBIDDEN", ERROR, "takedown",
+        "令牌无效或角色无权访问该审计资源", "伪造/过期/越权角色一律拒绝，操作记入安全日志"),
 }
 
 

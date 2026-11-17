@@ -37,6 +37,16 @@ class UpstreamError(NoticechainError):
     code = "E_UPSTREAM"
 
 
+class Unauthorized(NoticechainError):
+    status_code = 401
+    code = "T_AUTH_REQUIRED"
+
+
+class Forbidden(NoticechainError):
+    status_code = 403
+    code = "T_AUTH_FORBIDDEN"
+
+
 def install_handlers(app) -> None:
     from fastapi import Request
     from fastapi.responses import JSONResponse

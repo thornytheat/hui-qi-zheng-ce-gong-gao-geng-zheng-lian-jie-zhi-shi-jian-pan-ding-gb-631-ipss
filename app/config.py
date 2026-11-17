@@ -17,10 +17,26 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHINA_TZ = dt.timezone(dt.timedelta(hours=8), "Asia/Shanghai")
 UTC = dt.timezone.utc
 
-RULE_VERSION = "noticechain/1.4.0"
+RULE_VERSION = "noticechain/1.5.0"
 DECIMAL_QUANT = Decimal("0.01")
 MONEY_UNIT = "万元"
 AMOUNT_SUSPECT_LIMIT = Decimal("50000")
+
+# M8 下架与审计：服务端核验身份用的 HMAC 密钥与角色/有效期配置。
+# 密钥只从环境变量读（NOTICECHAIN_AUDIT_SECRET），不落代码、不进仓库；
+# 未配置时用进程内随机密钥（重启即失效），保证开发态也不会拿固定密钥签发。
+TAKEDOWN_MIN_REASON = 4
+TAKEDOWN_MIN_BASIS = 6
+AUDIT_ROLE_OFFICER = "audit_officer"     # 审计员：可看原文证据与全部处置留痕
+AUDIT_ROLE_OPERATOR = "takedown_operator"  # 下架经办：可发起下架/恢复，不能调审计原文
+AUDIT_ROLES = (AUDIT_ROLE_OFFICER, AUDIT_ROLE_OPERATOR)
+AUDIT_TOKEN_TTL_SECONDS = 12 * 3600
+# 可下架申请的理由目录（门户来函口径），自由文本之外必须命中其一
+TAKEDOWN_REASONS = (
+    "SENSITIVE_CONTENT",   # 含敏感信息
+    "PORTAL_REQUEST",      # 门户下架函要求
+    "LEGAL_HOLD",          # 法务/合规要求
+)
 
 STAGES = ("ingest", "parse", "quality", "chain", "list", "export")
 STAGE_LABELS = {
@@ -126,6 +142,8 @@ class Settings:
     rule_version: str = RULE_VERSION
     http_timeout: float = 5.0
     export_dir: str = str(PROJECT_ROOT / "var" / "export")
+    # M8：HMAC 审计密钥。None 表示进程启动时生成临时随机密钥（见 from_env）。
+    audit_secret: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -138,7 +156,8 @@ class Settings:
         if eval_raw:
             eval_date = dt.date.fromisoformat(eval_raw)
         return replace(cls(), db_path=db_path, sample_site_base=site,
-                       sample_site_dir=site_dir, eval_date=eval_date)
+                       sample_site_dir=site_dir, eval_date=eval_date,
+                       audit_secret=os.getenv("NOTICECHAIN_AUDIT_SECRET"))
 
     @property
     def data_dir(self) -> Path:

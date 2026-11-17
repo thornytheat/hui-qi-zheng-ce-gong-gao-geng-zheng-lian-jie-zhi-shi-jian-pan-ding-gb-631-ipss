@@ -27,6 +27,9 @@
     <div><dt>已撤销</dt><dd class="num">{{ data.counts.voided }}</dd></div>
     <div><dt>冲突隔离</dt><dd class="num">{{ data.counts.conflict }}</dd></div>
     <div><dt>已过期</dt><dd class="num">{{ data.counts.expired }}</dd></div>
+    {% if data.counts.taken_down %}
+    <div><dt>已下架(普通接口不可见)</dt><dd class="num">{{ data.counts.taken_down }} · <a href="/takedown">下架审计</a></dd></div>
+    {% endif %}
     <div><dt>清单合计</dt><dd class="num">{{ data.amount_total | money }}</dd></div>
   </dl>
 </section>

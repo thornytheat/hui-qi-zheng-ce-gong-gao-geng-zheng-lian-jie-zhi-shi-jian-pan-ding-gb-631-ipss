@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>下架与审计</h1>
+    <p class="panel-sub">已下架隔离 {{ data.counts.down }} 条 · 已恢复 {{ data.counts.restored }} 条 · 处置事件 {{ data.counts.events }} 条</p>
+  </div>
+  <dl class="keyvals">
+    <div><dt>下架隔离中</dt><dd class="num">{{ data.counts.down }}</dd></div>
+    <div><dt>已恢复公开</dt><dd class="num">{{ data.counts.restored }}</dd></div>
+    <div><dt>下架处置</dt><dd class="num">{{ data.counts.take_down }}</dd></div>
+    <div><dt>恢复处置</dt><dd class="num">{{ data.counts.restore }}</dd></div>
+    <div><dt>幂等重试</dt><dd class="num">{{ data.counts.retry_noop }}</dd></div>
+  </dl>
+  <p class="hint">普通查询接口与五类导出立即屏蔽下架公文号；原件不销毁，授权审计员可经 <code>/api/audit/replay</code> 调取当时原文证据与裁定依据。身份由服务端 HMAC 令牌核验，自报身份一律拒绝。</p>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>办理下架 / 恢复</h2>
+    <p class="panel-sub">需先在 <code>/api/auth/token</code> 取得服务端签发令牌，放入 Authorization: Bearer 头</p>
+  </div>
+  <div class="filters">
+    <label class="field"><span>公文号</span>
+      <input id="td-doc" type="text" placeholder="如 澄工信发〔2026〕37号">
+    </label>
+    <label class="field"><span>门户申请号</span>
+      <input id="td-app" type="text" placeholder="如 TD-2026-0001（同号重试幂等）">
+    </label>
+    <label class="field"><span>下架原因</span>
+      <select id="td-reason">
+        {% for r in data.reasons %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="field"><span>原因说明</span>
+      <input id="td-reason-text" type="text" placeholder="如 公告含个人敏感信息">
+    </label>
+    <label class="field"><span>裁定依据</span>
+      <input id="td-basis" type="text" placeholder="门户来函文号 + 条款，至少 6 字">
+    </label>
+    <label class="field"><span>审计令牌</span>
+      <input id="td-token" type="password" placeholder="Bearer 令牌内容">
+    </label>
+  </div>
+  <div class="actions">
+    <button class="btn btn-primary" id="btn-takedown" type="button">办理下架</button>
+    <button class="btn" id="btn-restore" type="button">办理恢复</button>
+    <button class="btn btn-ghost" id="btn-board" type="button">刷新工作台</button>
+  </div>
+  <p class="hint" id="td-hint">同一申请号重复提交不新增处置记录；恢复后仍保留完整下架历史。</p>
+  <div id="td-result" class="op-result" hidden>
+    <div class="dialog-body"><pre id="td-result-body"></pre></div>
+  </div>
+</section>
+
+<div class="split">
+  <section class="panel">
+    <div class="panel-head">
+      <h2>下架隔离中（普通接口不可见）</h2>
+      <p class="panel-sub">{{ data.down | length }} 条 · 跨批次持续生效</p>
+    </div>
+    {% if data.down %}
+    <div class="table-wrap">
+      <table class="grid compact">
+        <thead><tr><th>公文号</th><th>申请号</th><th>原因</th><th>首次批次</th><th>更新时间</th><th class="num">证据</th></tr></thead>
+        <tbody>
+          {% for r in data.down %}
+          <tr>
+            <td class="mono">{{ r.doc_no }}</td>
+            <td class="mono small">{{ r.application_no }}</td>
+            <td><code class="code">{{ r.reason_code }}</code><span class="small"> {{ r.reason_text }}</span></td>
+            <td class="mono small">{{ r.first_batch_id }}</td>
+            <td class="small">{{ r.updated_at | dt_iso }}</td>
+            <td class="num">{{ r.evidence_count }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty">当前没有下架隔离的公告。</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>已恢复（保留处置历史）</h2>
+      <p class="panel-sub">{{ data.restored | length }} 条 · 恢复不抹掉下架留痕</p>
+    </div>
+    {% if data.restored %}
+    <div class="table-wrap">
+      <table class="grid compact">
+        <thead><tr><th>公文号</th><th>恢复申请号</th><th>原下架批次</th><th>更新时间</th></tr></thead>
+        <tbody>
+          {% for r in data.restored %}
+          <tr>
+            <td class="mono">{{ r.doc_no }}</td>
+            <td class="mono small">{{ r.application_no }}</td>
+            <td class="mono small">{{ r.first_batch_id }}</td>
+            <td class="small">{{ r.updated_at | dt_iso }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="empty">还没有恢复记录。</p>
+    {% endif %}
+  </section>
+</div>
+<script src="/static/takedown.js" defer></script>
+{% endblock %}

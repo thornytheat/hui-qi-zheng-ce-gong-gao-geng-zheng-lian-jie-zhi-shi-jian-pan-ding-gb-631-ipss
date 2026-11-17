@@ -36,8 +36,13 @@ def decorate(row: dict, settings) -> dict:
 
 
 def list_chains(store, batch_id: str, settings, *, status: str | None = None,
-                keyword: str | None = None) -> dict:
+                keyword: str | None = None, include_taken_down: bool = False) -> dict:
     rows = [decorate(r, settings) for r in store.load_chains(batch_id)]
+    # M8：下架隔离态的公文号在普通查询里立即不可见（授权审计走 /api/audit/replay）。
+    down = store.down_doc_nos()
+    taken_down = [r for r in rows if r["doc_no"] in down]
+    if not include_taken_down:
+        rows = [r for r in rows if r["doc_no"] not in down]
     listed = [r for r in rows if r["listed"]]
     filtered = rows
     if status:
@@ -51,12 +56,14 @@ def list_chains(store, batch_id: str, settings, *, status: str | None = None,
         "chains": filtered,
         "all": rows,
         "listed": listed,
+        "taken_down": taken_down,
         "counts": {
             "total": len(rows),
             "listed": len(listed),
             "voided": sum(1 for r in rows if r["status"] == "VOIDED"),
             "conflict": sum(1 for r in rows if r["status"] == "CONFLICT"),
             "expired": sum(1 for r in rows if r["display_status"] == "EXPIRED"),
+            "taken_down": len(taken_down),
         },
         "amount_total": amount_total,
         "filters": {"status": status or "", "keyword": keyword or ""},

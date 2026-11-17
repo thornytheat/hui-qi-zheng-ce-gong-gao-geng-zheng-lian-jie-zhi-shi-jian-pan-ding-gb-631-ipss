@@ -7,10 +7,13 @@
 """
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+
+from . import config
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
@@ -73,6 +76,46 @@ CREATE TABLE IF NOT EXISTS rulings (
 );
 CREATE TABLE IF NOT EXISTS manifests (
     batch_id TEXT PRIMARY KEY, json TEXT NOT NULL
+);
+-- M8 下架与审计：每个公文号一行当前处置态；只追加状态，不删原件、不改批次数据。
+CREATE TABLE IF NOT EXISTS takedown_status (
+    doc_no TEXT PRIMARY KEY,
+    state TEXT NOT NULL,                 -- DOWN（已下架隔离）/ UP（已恢复公开）
+    first_batch_id TEXT NOT NULL,        -- 申请下架时该公文所在批次（证据锚点）
+    latest_batch_id TEXT NOT NULL,       -- 最近一次处置时命中的批次
+    application_no TEXT NOT NULL,        -- 门户下架申请号（幂等键之一）
+    reason_code TEXT NOT NULL,
+    reason_text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_takedown_state ON takedown_status(state);
+-- M8 处置留痕：下架/恢复/幂等重试全部追加，恢复也不删历史，审计可完整回放。
+CREATE TABLE IF NOT EXISTS takedown_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_no TEXT NOT NULL,
+    application_no TEXT NOT NULL,
+    action TEXT NOT NULL,                -- TAKE_DOWN / RESTORE / RETRY_NOOP
+    reason_code TEXT NOT NULL,
+    reason_text TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    actor TEXT NOT NULL,                 -- 服务端核验后的身份（令牌 subject）
+    actor_role TEXT NOT NULL,
+    batch_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_takedown_events_doc ON takedown_events(doc_no, event_id);
+-- M8 安全日志：身份核验失败（伪造/过期/越权）也留痕，便于事后追查。
+CREATE TABLE IF NOT EXISTS takedown_security_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    presented_subject TEXT NOT NULL DEFAULT '',
+    presented_role TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -357,6 +400,96 @@ class Store:
                     f"SELECT COUNT(*) AS n FROM {table} WHERE batch_id=?", (batch_id,)
                 ).fetchone()["n"]
         return out
+
+    # ---------- M8 下架与审计 ----------
+    def get_takedown(self, doc_no: str) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM takedown_status WHERE doc_no=?", (doc_no,)).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["evidence"] = json.loads(item.pop("evidence_json") or "[]")
+        return item
+
+    def list_takedowns(self, state: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM takedown_status"
+        args: tuple = ()
+        if state:
+            sql += " WHERE state=?"
+            args = (state,)
+        sql += " ORDER BY updated_at DESC, doc_no"
+        with self.connect() as conn:
+            rows = [dict(r) for r in conn.execute(sql, args).fetchall()]
+        for row in rows:
+            row["evidence"] = json.loads(row.pop("evidence_json") or "[]")
+        return rows
+
+    def down_doc_nos(self) -> set[str]:
+        """当前处于下架隔离态的公文号集合——普通查询/导出唯一的过滤依据。"""
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT doc_no FROM takedown_status WHERE state='DOWN'").fetchall()
+        return {r["doc_no"] for r in rows}
+
+    def upsert_takedown_status(self, item: dict) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO takedown_status (doc_no,state,first_batch_id,latest_batch_id,
+                        application_no,reason_code,reason_text,created_at,updated_at,
+                        evidence_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(doc_no) DO UPDATE SET
+                     state=excluded.state, latest_batch_id=excluded.latest_batch_id,
+                     application_no=excluded.application_no, reason_code=excluded.reason_code,
+                     reason_text=excluded.reason_text, updated_at=excluded.updated_at,
+                     evidence_json=excluded.evidence_json""",
+                (item["doc_no"], item["state"], item["first_batch_id"],
+                 item["latest_batch_id"], item["application_no"], item["reason_code"],
+                 item["reason_text"], item["created_at"], item["updated_at"],
+                 json.dumps(item.get("evidence", []), ensure_ascii=False)))
+
+    def insert_takedown_event(self, event: dict) -> int:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO takedown_events (doc_no,application_no,action,reason_code,
+                        reason_text,basis,actor,actor_role,batch_id,created_at,detail_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (event["doc_no"], event["application_no"], event["action"],
+                 event["reason_code"], event["reason_text"], event["basis"],
+                 event["actor"], event["actor_role"], event["batch_id"],
+                 event["created_at"],
+                 json.dumps(event.get("detail", {}), ensure_ascii=False)))
+            return int(cur.lastrowid)
+
+    def list_takedown_events(self, doc_no: str | None = None) -> list[dict]:
+        if doc_no is None:
+            return self._all(
+                "SELECT * FROM takedown_events ORDER BY event_id", ())
+        return self._all(
+            "SELECT * FROM takedown_events WHERE doc_no=? ORDER BY event_id", (doc_no,))
+
+    def count_takedown_events(self, doc_no: str, application_no: str, action: str) -> int:
+        with self.connect() as conn:
+            return conn.execute(
+                "SELECT COUNT(*) AS n FROM takedown_events "
+                "WHERE doc_no=? AND application_no=? AND action=?",
+                (doc_no, application_no, action)).fetchone()["n"]
+
+    def insert_security_log(self, *, endpoint: str, reason_code: str,
+                            presented_subject: str = "", presented_role: str = "",
+                            detail: str = "") -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """INSERT INTO takedown_security_log
+                       (created_at,endpoint,reason_code,presented_subject,presented_role,detail)
+                   VALUES (?,?,?,?,?,?)""",
+                (dt.datetime.now(config.UTC).isoformat(timespec="seconds"),
+                 endpoint, reason_code, presented_subject, presented_role, detail))
+
+    def list_security_log(self, limit: int = 50) -> list[dict]:
+        return self._all(
+            "SELECT * FROM takedown_security_log ORDER BY log_id DESC LIMIT ?", (limit,))
 
     def _all(self, sql: str, args: tuple) -> list[dict]:
         with self.connect() as conn:

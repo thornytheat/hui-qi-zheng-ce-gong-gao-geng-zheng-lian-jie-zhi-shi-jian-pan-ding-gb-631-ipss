@@ -7,6 +7,8 @@ services:
       SAMPLE_SITE_BASE: http://sample-site
       SAMPLE_SITE_DIR: /app/sample_site
       EVAL_DATE: "2026-11-15"
+      # 生产部署请改为真实长随机密钥；同名变量可在宿主环境或 .env 中覆盖
+      NOTICECHAIN_AUDIT_SECRET: "${NOTICECHAIN_AUDIT_SECRET:-compose-dev-audit-secret-change-me}"
       TZ: Asia/Shanghai
     ports:
       - "18200:8000"

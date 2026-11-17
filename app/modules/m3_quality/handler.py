@@ -17,12 +17,28 @@ def _batch_id(ctx: Ctx, batch_id: str | None) -> str:
     return batch["batch_id"]
 
 
+def _public_quarantine_rows(ctx: Ctx, batch_id: str) -> list[dict]:
+    """M8：剔除下架公文号关联隔离行（带原值），普通隔离口不泄露下架内容。"""
+    rows = ctx.store.load_quarantine(batch_id)
+    down = ctx.store.down_doc_nos()
+    if not down:
+        return rows
+    hidden_refs = set()
+    for doc_no in down:
+        chain = ctx.store.load_chain(batch_id, doc_no)
+        if chain is not None:
+            hidden_refs.update(v["row_ref"] for v in chain["version_rows"])
+    if not hidden_refs:
+        return rows
+    return [r for r in rows if r.get("row_ref") not in hidden_refs]
+
+
 @router.get("/api/quarantine")
 def api_quarantine(batch_id: str | None = None, code: str | None = None,
                    stage: str | None = None, level: str | None = None,
                    ctx: Ctx = Depends(get_ctx)) -> dict:
     resolved = _batch_id(ctx, batch_id)
-    rows = ctx.store.load_quarantine(resolved)
+    rows = _public_quarantine_rows(ctx, resolved)
     payload = service.view(rows, code=code, stage=stage, level=level)
     payload["batch_id"] = resolved
     return payload
@@ -32,7 +48,7 @@ def api_quarantine(batch_id: str | None = None, code: str | None = None,
 def api_quarantine_csv(batch_id: str | None = None,
                        ctx: Ctx = Depends(get_ctx)) -> Response:
     resolved = _batch_id(ctx, batch_id)
-    rows = ctx.store.load_quarantine(resolved)
+    rows = _public_quarantine_rows(ctx, resolved)
     body = quarantine.to_csv_text(rows).encode("utf-8-sig")
     return Response(
         content=body, media_type="text/csv; charset=utf-8",
@@ -63,7 +79,7 @@ def page_quarantine(request: Request, batch_id: str | None = None,
                "filters": {"code": code or "", "stage": stage or "",
                            "level": level or ""}}
     if batch is not None:
-        payload = service.view(ctx.store.load_quarantine(batch["batch_id"]),
+        payload = service.view(_public_quarantine_rows(ctx, batch["batch_id"]),
                                code=code, stage=stage, level=level)
     return render(request, "quarantine.html", batch=batch, page="quarantine",
                   payload=payload, page_title="隔离区与原因分布")

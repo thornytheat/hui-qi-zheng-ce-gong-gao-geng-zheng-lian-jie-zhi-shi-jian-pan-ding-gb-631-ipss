@@ -17,6 +17,9 @@
 - **导出**：可申报清单 CSV、隔离 CSV、链版本 CSV、运行清单 JSON、对账 JSON；页面与导出规则一致。
 - **复核与回放**：冲突链人工裁定（选版 + 裁定人 + 依据）、按公告号逐版回放、撤销后非法迁移拦截、
   >20 版超长链线性合并、裁定后清单与自动清单并存且逐字段留差异。
+- **下架与审计（M8）**：门户来函下架的公告只立隔离态、不销毁原件；普通查询与五类导出立即屏蔽，
+  授权审计员经 HMAC 令牌回放当时原文证据与裁定依据；同申请重试幂等、恢复保留完整处置历史，
+  跨批次/复采/中断续跑都不会让已封禁内容重新公开。
 
 ## 模块
 
@@ -29,6 +32,7 @@
 | M5 批次与续跑 | 查历史、续跑、幂等重跑 | `GET /api/batches`、`POST /api/batches/{id}/resume` | `/batches` |
 | M6 复核与导出 | 四账复核与五类导出 | `GET /api/export` | `/export` |
 | M7 复核与回放 | 冲突链裁定、按公告号回放、裁定后重算 | `GET /api/review`、`GET /api/review/replay`、`POST /api/review/ruling` | `/review` |
+| M8 下架与审计 | 办理下架/恢复、授权审计回放、处置留痕 | `POST /api/takedown`、`POST /api/takedown/restore`、`GET /api/audit/replay`、`POST /api/auth/token` | `/takedown` |
 
 深度登记（功能模块表、14 条 TRAP 表、反例与不变量）：`docs/DEPTH.md`；字段契约：`docs/DATA-DICTIONARY.md`。
 
@@ -62,6 +66,22 @@ docker compose up -d --build
 5. `/export` 看四账与运行清单，下载五类文件。
 6. `/review` 看 3 条冲突链，选 `澄科技发〔2026〕21号` 回放两版证据；裁定人填 2 字以上、依据填 6 字以上，
    提交后状态从「冲突隔离」变为人工结论，改判差异逐字段列出，自动值仍留在留痕里。
+7. `/takedown` 演示下架与审计：先 `POST /api/auth/token` 取得服务端签发令牌，再带
+   `Authorization: Bearer <token>` 调 `POST /api/takedown`；下架后 `/api/policies` 与导出立即查不到该公文号，
+   审计员用 `GET /api/audit/replay?doc_no=...` 仍可调取原文证据与完整裁定留痕。
+
+## 下架与审计（M8）规则
+
+- **只隔离不销毁**：下架在 `takedown_status` 立 `DOWN` 态，`announcements/chain_versions/quarantine` 原件一行不删；
+  普通接口（`/api/policies`、链详情、隔离区、复核回放）与五类导出按公文号全局过滤。
+- **跨批次持续生效**：处置态按 `doc_no` 存、不绑批次；重新采集、来源切换产生的新批次，以及失败后续跑，
+  已封禁公文号在普通接口与导出里依旧不可见，堵住「只改最新批次、旧批次仍可下载原文」的泄露口。
+- **授权审计保留证据**：`GET /api/audit/replay` 仅 `audit_officer` 可调，回放首次下架批次的原始链版本、
+  原文摘录、关联隔离行与全部处置事件（含裁定依据、办理人、申请号）。
+- **身份服务端核验**：令牌为 HMAC-SHA256 签名（密钥取 `NOTICECHAIN_AUDIT_SECRET`，未配置则进程随机），
+  验签/时效/角色任一不过即 401/403 并写安全日志；请求体里自报的 actor/role 不参与授权。
+- **幂等与留痕**：同一 `(公文号, 申请号)` 重试返回原处置、只追加 `RETRY_NOOP`，不新增处置结论；
+  恢复（`RESTORE`）不删除下架历史，重新下架会追加第二份证据快照。
 
 ## 规则与已知不覆盖
 
@@ -73,13 +93,13 @@ docker compose up -d --build
 ## 目录
 
 ```text
-app/                 main/config/errors/reasons/manifest/store/web + modules/m1..m7
-app/templates/       base + 7 个页面（采集/清单/链详情/隔离/复核/批次/导出）
-app/static/          theme.css（令牌）layout.css（骨架）components.css（元件）+ 3 个 js
+app/                 main/config/errors/reasons/manifest/store/web + modules/m1..m8
+app/templates/       base + 8 个页面（采集/清单/链详情/隔离/复核/下架审计/批次/导出）
+app/static/          theme.css（令牌）layout.css（骨架）components.css（元件）+ 4 个 js
 docs/                DEPTH.md（模块表 + TRAP 表）DATA-DICTIONARY.md（字段契约）
 sample_site/         三门户 9 个文件（含 GB18030 页、截断页、附件 CSV、门户导航）
 sample_data/         announcements_dirty.csv（同样的脏数据另存一份，便于离线核对）
-tests/               conftest + 每模块 1 个（含 test_m7_review.py）+ e2e + fixtures/expected.py
+tests/               conftest + 每模块 1 个（含 test_m7_review.py、test_m8_takedown.py）+ e2e + fixtures/expected.py
 ```
 
 ## 测试
@@ -88,4 +108,5 @@ tests/               conftest + 每模块 1 个（含 test_m7_review.py）+ e2e 
 docker compose exec -T app pytest -q
 ```
 
-96 条测试（容器内 96 passed），覆盖 7 个模块（每模块 ≥7 条）与 14 条 TRAP；含 5 条反例、5 条不变量与端到端。
+131 条测试（容器内 131 passed，1 条真实 HTTP 样例站用例在本地无样例站时跳过），
+覆盖 8 个模块（每模块 ≥7 条）与 14 条 TRAP；含反例、不变量、端到端与下架审计的越权/幂等/跨批次场景。

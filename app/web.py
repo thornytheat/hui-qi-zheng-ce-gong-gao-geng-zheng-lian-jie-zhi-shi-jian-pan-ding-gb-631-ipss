@@ -22,11 +22,13 @@ NAV = (
     ("/policies", "政策清单", "chain"),
     ("/quarantine", "隔离区", "quality"),
     ("/review", "复核回放", "review"),
+    ("/takedown", "下架审计", "takedown"),
     ("/batches", "批次历史", "batches"),
     ("/export", "导出", "export"),
 )
 STATUS_LABELS = {
     "ACTIVE": "有效", "VOIDED": "已撤销", "CONFLICT": "冲突隔离", "EXPIRED": "已过期",
+    "DOWN": "已下架", "UP": "已恢复",
     "done": "完成", "failed": "失败", "running": "运行中", "ready": "就绪",
 }
 
